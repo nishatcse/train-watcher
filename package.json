@@ -1,0 +1,22 @@
+{
+  "name": "train-watcher",
+  "version": "1.0.0",
+  "description": "Bangladesh Railway ticket availability watcher — standalone. Polls the search API for seats on the configured routes and sends a Telegram alert when any appear.",
+  "main": "src/index.js",
+  "scripts": {
+    "watch": "node src/index.js",
+    "check-once": "node src/index.js --once",
+    "relogin": "node src/relogin.js",
+    "holder-login": "node src/holder-login.js",
+    "hold-test": "node src/seat-holder.js",
+    "test-telegram": "node src/test-telegram.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "playwright": "^1.58.2"
+  }
+}

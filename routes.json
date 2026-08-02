@@ -1,0 +1,4 @@
+[
+  { "from": "Dhaka",       "to": "Cox's Bazar", "date": "27-Jul-2026", "train": "COXS BAZAR EXPRESS (814)", "class": "S_CHAIR" },
+  { "from": "Cox's Bazar", "to": "Dhaka",       "date": "28-Jul-2026", "train": "COXS BAZAR EXPRESS (814)", "class": "S_CHAIR" }
+]

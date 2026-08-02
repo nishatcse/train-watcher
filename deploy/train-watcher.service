@@ -1,0 +1,20 @@
+[Unit]
+Description=BD Railway ticket availability watcher (standalone)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=afridi
+WorkingDirectory=/home/afridi/Documents/train-watcher
+# Watching is pure API (no browser). A browser is only needed occasionally to
+# re-login the watcher account (~every 12h), and for auto-hold if it is enabled;
+# xvfb runs it headlessly so the service auto-starts on boot without depending on
+# a desktop session being logged in.
+Environment=HOME=/home/afridi
+ExecStart=/usr/bin/xvfb-run -a /usr/bin/node src/index.js
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
