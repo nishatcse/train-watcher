@@ -2,9 +2,12 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { config } = require("./config");
-const { runChecksOnce, checkRoute, loadState } = require("./checker");
+const { runChecksOnce, checkRoute, loadState, saveState } = require("./checker");
+const { expandRoutes, runPool } = require("./scanner");
 const { SessionExpiredError } = require("./api-client");
 const { loadSession, reloadSessionFromDisk, tokenExpiresAt } = require("./session");
+const { refreshSession } = require("./token-refresh");
+const { validateRoutes } = require("./catalog");
 const { sendTelegramMessage } = require("./telegram");
 const { sleep, log } = require("./helpers");
 
@@ -55,6 +58,29 @@ async function notifyReloginFailure(reason) {
   }
 }
 
+/**
+ * Renew the session, cheapest route first: a refresh-token POST costs one HTTP
+ * round trip, while the Chrome fallback spawns a browser and solves Turnstile —
+ * minutes of CPU on a Pi. The fallback stays because refresh tokens expire too.
+ */
+async function renewSession() {
+  if (await refreshSession()) {
+    reloadSessionFromDisk();
+    lastReloginAlertAt = 0;
+    return true;
+  }
+
+  log("Falling back to browser re-login");
+  const ok = await runReloginProcess();
+  if (ok) {
+    reloadSessionFromDisk();
+    lastReloginAlertAt = 0;
+    return true;
+  }
+
+  return false;
+}
+
 async function ensureFreshSession() {
   let expiresAt = null;
   try {
@@ -70,27 +96,21 @@ async function ensureFreshSession() {
   log(
     expiresAt
       ? `Token expires at ${new Date(expiresAt).toISOString()}, renewing now`
-      : "No valid token, attempting re-login"
+      : "No valid token, attempting renewal"
   );
 
-  const ok = await runReloginProcess();
-  if (ok) {
-    reloadSessionFromDisk();
-    lastReloginAlertAt = 0;
+  if (await renewSession()) {
     log("Session renewed");
     return true;
   }
 
-  await notifyReloginFailure("re-login script exited with an error (see watcher logs)");
+  await notifyReloginFailure("token refresh and browser re-login both failed (see watcher logs)");
   return false;
 }
 
 async function recoverFromExpiredSession(error) {
   log(`Session expired mid-run: ${error.message}`);
-  const ok = await runReloginProcess();
-  if (ok) {
-    reloadSessionFromDisk();
-    lastReloginAlertAt = 0;
+  if (await renewSession()) {
     log("Session renewed after expiry");
     return true;
   }
@@ -100,7 +120,40 @@ async function recoverFromExpiredSession(error) {
 }
 
 function describeRoutes() {
-  return config.routes.map((route) => `${route.from}->${route.to} ${route.date}`).join(", ");
+  return config.routes
+    .map((route) => `${route.from}->${route.to}${route.scanAllPairs ? " (all pairs)" : ""} ${route.date}`)
+    .join(", ");
+}
+
+/**
+ * One tick: expand any `scanAllPairs` route into its station pairs, then check
+ * them all with a bounded number in flight. Replaces the old round-robin, where
+ * two routes on a 15s interval meant each was only seen every 30 seconds.
+ */
+async function scanAllRoutes() {
+  const routes = await expandRoutes(config.routes);
+  const state = loadState();
+  const startedAt = Date.now();
+
+  const results = await runPool(routes, config.scan, (route) => checkRoute(route, state));
+  saveState(state);
+
+  const expired = results.find((r) => !r.ok && r.error instanceof SessionExpiredError);
+  if (expired) {
+    throw expired.error;
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  const withSeats = results.filter((r) => r.ok && r.value.availableCount > 0).length;
+
+  log(
+    `Scanned ${routes.length} pair(s) in ${Date.now() - startedAt}ms ` +
+      `— ${withSeats} with seats, ${failed.length} failed (concurrency ${config.scan.concurrency})`
+  );
+
+  for (const failure of failed.slice(0, 3)) {
+    log(`  failure: ${failure.error.message}`);
+  }
 }
 
 async function main() {
@@ -113,6 +166,12 @@ async function main() {
 
   log(`Watcher started on ${os.hostname()} — ${config.routes.length} route(s): ${describeRoutes()}`);
 
+  // Catch typos and dead dates up front instead of letting them look like
+  // "0 seats available" for hours.
+  for (const problem of validateRoutes(config.routes)) {
+    log(`routes.json problem — ${problem}`);
+  }
+
   try {
     await sendTelegramMessage(
       config.telegramBotToken,
@@ -123,38 +182,24 @@ async function main() {
     log(`Startup Telegram message failed: ${error.message}`);
   }
 
-  let routeIndex = 0;
-
   while (true) {
-    const route = config.routes[routeIndex];
     let waitMs = config.pollIntervalSeconds * 1000;
-    let advance = true;
 
     try {
       const sessionOk = await ensureFreshSession();
       if (sessionOk) {
-        await checkRoute(route, loadState());
+        await scanAllRoutes();
       } else {
         waitMs = RELOGIN_RETRY_MS;
-        advance = false;
       }
     } catch (error) {
       if (error instanceof SessionExpiredError) {
-        const recovered = await recoverFromExpiredSession(error);
-        if (recovered) {
-          // retry the same route on the next tick instead of skipping it
-          advance = false;
-        } else {
+        if (!(await recoverFromExpiredSession(error))) {
           waitMs = RELOGIN_RETRY_MS;
-          advance = false;
         }
       } else {
         log(`Check failed: ${error.message}`);
       }
-    }
-
-    if (advance) {
-      routeIndex = (routeIndex + 1) % config.routes.length;
     }
 
     log(`Waiting ${Math.round(waitMs / 1000)} seconds before next cycle`);

@@ -24,14 +24,6 @@ function numberFromEnv(name, fallback) {
   return value;
 }
 
-function boolFromEnv(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  return /^(1|true|yes|on)$/i.test(raw.trim());
-}
-
 const rootDir = path.resolve(__dirname, "..");
 const stateDir = path.join(rootDir, "state");
 const routesPath = path.join(rootDir, "routes.json");
@@ -54,7 +46,10 @@ function normalizeRoute(entry, source) {
     date,
     train: (entry.train || DEFAULT_TRAIN).trim(),
     class: (entry.class || DEFAULT_CLASS).trim(),
-    hold: entry.hold === true,
+    // When true the watcher asks /train-routes for every stoppage and polls all
+    // forward station pairs, not just from->to. from/to still matter: they are
+    // the fallback if the stoppage lookup fails.
+    scanAllPairs: entry.scanAllPairs === true,
   };
 }
 
@@ -88,85 +83,22 @@ function loadRoutes() {
 
 const routes = loadRoutes();
 
-const autoHoldEnabled = boolFromEnv("AUTO_HOLD_ENABLED", false);
-
-// The auto-hold target is defined by the HOLD_* env vars (independent of the
-// routes.json the watcher polls). All five must be set for a target to exist.
-function loadHoldTarget() {
-  const from = (process.env.HOLD_FROM || "").trim();
-  const to = (process.env.HOLD_TO || "").trim();
-  const date = (process.env.HOLD_DATE || "").trim();
-  const train = (process.env.HOLD_TRAIN || "").trim();
-  const seatClass = (process.env.HOLD_CLASS || "").trim();
-  if (!from || !to || !date || !train || !seatClass) {
-    return null;
-  }
-  return { from, to, date, train, class: seatClass, hold: true };
-}
-
-const holdTarget = loadHoldTarget();
-
-// When auto-hold is enabled, make sure the watcher actually polls the target so
-// availability there triggers a hold. Add it to the routes if it isn't already
-// one of them (matched by from/to/date/train/class).
-if (autoHoldEnabled && holdTarget) {
-  const already = routes.find(
-    (r) =>
-      r.from === holdTarget.from &&
-      r.to === holdTarget.to &&
-      r.date === holdTarget.date &&
-      r.train === holdTarget.train &&
-      r.class === holdTarget.class
-  );
-  if (already) {
-    already.hold = true;
-  } else {
-    routes.push(holdTarget);
-  }
-}
-
-// Clamp seats-to-hold to the 1-4 range the railway allows per user.
-const seatsToHold = Math.max(1, Math.min(4, Math.round(numberFromEnv("SEATS_TO_HOLD", 2))));
-
-// Specific seat numbers to hold (e.g. "THO-44,THO-43"). When set these override
-// the auto-pick; empty means auto-pick. Capped at 4 (railway per-user limit).
-const holdSeats = (process.env.HOLD_SEATS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .slice(0, 4);
-
-// The holder account (B) is a SECOND railway account used only by the browser to
-// hold seats, so holding never rotates the watcher account's (A) session.
-const holder = {
-  username: (process.env.HOLDER_USERNAME || "").trim(),
-  password: (process.env.HOLDER_PASSWORD || "").trim(),
-};
-
-if (autoHoldEnabled && (!holder.username || !holder.password)) {
-  throw new Error(
-    "AUTO_HOLD_ENABLED=true requires HOLDER_USERNAME and HOLDER_PASSWORD (the second account used to hold seats)."
-  );
-}
-
 const config = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   telegramChatId: required("TELEGRAM_CHAT_ID"),
   routes,
   pollIntervalSeconds: numberFromEnv("POLL_INTERVAL_SECONDS", 15),
+  // Every scan request carries the same device identity, so the server sees one
+  // device firing N requests at once. The real limit is unknown — start low and
+  // raise it only after watching the logs for 429s.
+  scan: {
+    concurrency: Math.max(1, Math.min(10, Math.round(numberFromEnv("SCAN_CONCURRENCY", 2)))),
+    jitterMs: numberFromEnv("SCAN_JITTER_MS", 120),
+  },
   browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || "/usr/bin/google-chrome-stable",
   railwayUsername: required("RAILWAY_USERNAME"),
   railwayPassword: required("RAILWAY_PASSWORD"),
-  holder,
   stateFilePath: path.join(stateDir, "availability-state.json"),
-  autoHold: {
-    enabled: autoHoldEnabled,
-    target: holdTarget,
-    seats: holdSeats,
-    seatsToHold,
-    repeatCount: Math.max(1, Math.round(numberFromEnv("HOLD_REPEAT_COUNT", 1))),
-    refreshSeconds: numberFromEnv("HOLD_REFRESH_SECONDS", 180),
-  },
 };
 
 module.exports = { config, rootDir, stateDir };

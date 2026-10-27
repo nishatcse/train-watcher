@@ -1,0 +1,22 @@
+{
+  "name": "train-watcher-backend",
+  "version": "1.0.0",
+  "description": "Read-only BD Railway seat-availability monitor: scheduler + REST API + FCM/Telegram alerts. No booking, no seat holding.",
+  "main": "src/server.js",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test test/*.test.js",
+    "push-local-session": "node scripts/push-local-session.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "google-auth-library": "^10.0.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0"
+  }
+}

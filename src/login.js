@@ -5,34 +5,80 @@ const { log } = require("./helpers");
 const TURNSTILE_WAIT_SECONDS = Number(process.env.TURNSTILE_WAIT_SECONDS) || 120;
 const LOGIN_RESULT_WAIT_SECONDS = 30;
 
-// Read the full session blob (token + device keys) out of the page's localStorage,
-// or null if the user is not logged in yet.
+// The keys the API poller actually needs. Everything else in localStorage is UI
+// state we do not want in .env.
+const SESSION_KEYS = ["token", "ssdk", "user", "uudid", "handshake_data", "handshake_hash"];
+
+// The IAM server advertises the `refresh_token` grant and our JWT carries the
+// `offline_access` scope, so a refresh token exists somewhere — but the SPA
+// bundle never mentions the string, so we cannot know its localStorage key up
+// front. Match on the key name instead of hardcoding one.
+const REFRESH_KEY_PATTERN = /refresh/i;
+
+// Read the session blob (token + device keys) out of the page's localStorage,
+// or null if the user is not logged in yet. Also picks up any refresh-token-ish
+// key so `token-refresh.js` can renew without Chrome.
 async function readSession(page) {
-  return page.evaluate(() => {
+  return page.evaluate((wanted) => {
     if (!localStorage.getItem("token")) {
       return null;
     }
-    return {
-      token: localStorage.getItem("token"),
-      ssdk: localStorage.getItem("ssdk"),
-      user: localStorage.getItem("user"),
-      uudid: localStorage.getItem("uudid"),
-      handshake_data: localStorage.getItem("handshake_data"),
-      handshake_hash: localStorage.getItem("handshake_hash"),
-    };
+    const session = {};
+    for (const key of wanted) {
+      session[key] = localStorage.getItem(key);
+    }
+    for (const key of Object.keys(localStorage)) {
+      if (/refresh/i.test(key)) {
+        session[key] = localStorage.getItem(key);
+      }
+    }
+    return session;
+  }, SESSION_KEYS);
+}
+
+/**
+ * Watch the login network traffic for a refresh token. The SPA throws it away,
+ * but the auth server still sends it, so scrape it off the response body before
+ * it is lost. Returns a getter for whatever was captured.
+ */
+function captureRefreshToken(page) {
+  let captured = null;
+
+  page.on("response", async (response) => {
+    const url = response.url();
+    if (!/connect\/token|auth\/sign-in|auth\/validate-otp/.test(url)) {
+      return;
+    }
+    try {
+      const body = await response.json();
+      // The token can sit at the top level or one level down under `data`.
+      const found = body.refresh_token || (body.data && body.data.refresh_token);
+      if (found) {
+        captured = found;
+        log(`Refresh token captured from ${new URL(url).pathname}`);
+      }
+    } catch {
+      // Not JSON, or the body is already gone — nothing to capture here.
+    }
   });
+
+  return () => captured;
 }
 
 /**
  * Log the given account in on `page` (a real CDP-Chrome page so Turnstile solves).
  * Clears storage for a fresh device handshake, fills the credentials, waits for
  * Turnstile, submits, and returns the resulting session blob from localStorage.
- * Shared by relogin.js (watcher account) and browser-hold.js (holder account).
+ * Used by relogin.js.
  */
 async function performLogin(page, { username, password }) {
   if (!username || !password) {
     throw new Error("login called without username/password");
   }
+
+  // Start listening before the first navigation — the token response is the one
+  // thing we cannot go back and re-read afterwards.
+  const getRefreshToken = captureRefreshToken(page);
 
   await page.goto("https://eticket.railway.gov.bd/", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.evaluate(() => {
@@ -83,6 +129,19 @@ async function performLogin(page, { username, password }) {
       .catch(() => "");
     const hint = bodyText.replace(/\s+/g, " ").slice(0, 200);
     throw new Error(`Login did not produce a token within ${LOGIN_RESULT_WAIT_SECONDS}s. Page said: ${hint}`);
+  }
+
+  // localStorage wins if it had one; otherwise fall back to what we scraped off
+  // the network. Either way this is best-effort — the Chrome path still works
+  // fine without a refresh token, it just cannot be skipped next time.
+  const fromStorage = Object.keys(session).find((key) => REFRESH_KEY_PATTERN.test(key));
+  const refreshToken = (fromStorage && session[fromStorage]) || getRefreshToken();
+
+  if (refreshToken) {
+    session.refresh_token = refreshToken;
+    log("Refresh token saved — next renewal can skip Chrome");
+  } else {
+    log("No refresh token found; renewals will keep using Chrome");
   }
 
   return session;

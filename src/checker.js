@@ -1,17 +1,9 @@
 const fs = require("fs");
 const { config } = require("./config");
 const { searchTrips } = require("./api-client");
-const { holdSeatsForTrip } = require("./seat-holder");
+const { expandRoutes } = require("./scanner");
 const { sendTelegramMessage } = require("./telegram");
 const { sleep, log } = require("./helpers");
-
-// Guards against launching a second hold while one is already running (a user
-// can hold at most 4 seats at a time).
-let holdInProgress = false;
-// After a hold ends (success or failure) wait this long before triggering another,
-// so a failing hold can't hammer the (weak) Pi with back-to-back browser launches.
-const HOLD_COOLDOWN_MS = (Number(process.env.HOLD_COOLDOWN_SECONDS) || 30) * 1000;
-let holdCooldownUntil = 0;
 
 function buildSearchUrl(route) {
   const params = new URLSearchParams({
@@ -44,29 +36,40 @@ function saveState(state) {
   fs.writeFileSync(config.stateFilePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
+const NOTHING_AVAILABLE = { availableCount: 0, onlineCount: 0, offlineCount: 0, fare: null, vat: 0, totalFare: null };
+
 function extractAvailability(trains, route) {
   const wantedTrain = route.train.trim().toLowerCase();
   const train = trains.find((entry) => (entry.trip_number || "").trim().toLowerCase() === wantedTrain);
 
   if (!train) {
     log(`${route.train} is not listed in the API results for ${route.from} -> ${route.to} on ${route.date}; treating as 0 available`);
-    return { availableCount: 0, onlineCount: 0, offlineCount: 0, fare: null };
+    return { ...NOTHING_AVAILABLE };
   }
 
   const seatType = (train.seat_types || []).find((entry) => entry.type === route.class);
   if (!seatType) {
     log(`${route.class} is not offered on ${route.train} for ${route.from} -> ${route.to} on ${route.date}; treating as 0 available`);
-    return { availableCount: 0, onlineCount: 0, offlineCount: 0, fare: null };
+    return { ...NOTHING_AVAILABLE };
   }
 
+  // `seat_counts` carries `is_divided: true` — Bangladesh Railway splits each
+  // class into an online quota and a counter quota. Only the online half can be
+  // bought from this site, so adding the two (as this used to) roughly doubled
+  // every alert and could even fire when zero seats were actually buyable.
   const online = Number(seatType.seat_counts && seatType.seat_counts.online) || 0;
   const offline = Number(seatType.seat_counts && seatType.seat_counts.offline) || 0;
 
+  const fare = Number(seatType.fare) || 0;
+  const vat = Number(seatType.vat_amount) || 0;
+
   return {
-    availableCount: online + offline,
+    availableCount: online,
     onlineCount: online,
     offlineCount: offline,
-    fare: seatType.fare || null,
+    fare: fare || null,
+    vat,
+    totalFare: fare ? fare + vat : null,
   };
 }
 
@@ -89,43 +92,20 @@ function formatNotification(route, result) {
     `Class: ${route.class}`,
     `Route: ${route.from} -> ${route.to}`,
     `Date: ${route.date}`,
-    `Available: ${result.availableCount} (online ${result.onlineCount} + counter ${result.offlineCount})`,
+    `Online: ${result.onlineCount} seat(s) buyable now (counter quota: ${result.offlineCount})`,
   ];
 
-  if (result.fare) {
-    lines.push(`Fare: ${result.fare} BDT`);
+  if (result.totalFare) {
+    // Only spell out the split when VAT actually applies — S_CHAIR is 0%.
+    lines.push(
+      result.vat > 0
+        ? `Fare: ${result.totalFare} BDT (${result.fare} + ${result.vat} VAT)`
+        : `Fare: ${result.totalFare} BDT`
+    );
   }
 
   lines.push(`Link: ${buildSearchUrl(route)}`);
   return lines.join("\n");
-}
-
-function isHoldInProgress() {
-  return holdInProgress;
-}
-
-// Launches the browser-based hold WITHOUT blocking the watcher loop, so other
-// routes keep being polled while seats are held.
-function maybeAutoHold(route, result) {
-  if (!config.autoHold.enabled || !route.hold || result.availableCount <= 0) {
-    return;
-  }
-  if (holdInProgress) {
-    log("Auto-hold skipped: a hold is already in progress");
-    return;
-  }
-  if (Date.now() < holdCooldownUntil) {
-    return; // still cooling down from the previous hold attempt
-  }
-
-  holdInProgress = true;
-  log(`Auto-hold triggered for ${route.train} ${route.from} -> ${route.to} (${result.availableCount} available)`);
-  holdSeatsForTrip({ route })
-    .catch((error) => log(`Auto-hold ended with error: ${error.message}`))
-    .finally(() => {
-      holdInProgress = false;
-      holdCooldownUntil = Date.now() + HOLD_COOLDOWN_MS;
-    });
 }
 
 async function checkRoute(route, state) {
@@ -138,38 +118,41 @@ async function checkRoute(route, state) {
   const stateKey = routeStateKey(route);
   const previous = state[stateKey];
 
-  log(`Result for ${route.from} -> ${route.to} on ${route.date}: ${result.availableCount} seat(s) available`);
+  log(
+    `Result for ${route.from} -> ${route.to} on ${route.date}: ${result.onlineCount} online, ${result.offlineCount} counter`
+  );
 
   if (shouldNotify(previous, result)) {
     await sendTelegramMessage(config.telegramBotToken, config.telegramChatId, formatNotification(route, result));
     log(`Telegram notification sent for ${route.from} -> ${route.to} on ${route.date}`);
   }
 
-  maybeAutoHold(route, result);
-
+  // The caller persists once per cycle: a full-train scan runs 36 of these in
+  // parallel, and saving inside each one would mean 36 synchronous writes per
+  // tick — pointless SD-card wear on a Pi.
   state[stateKey] = {
     availableCount: result.availableCount,
     checkedAt: new Date().toISOString(),
     url: buildSearchUrl(route),
   };
 
-  saveState(state);
   return result;
 }
 
 async function runChecksOnce() {
   const state = loadState();
+  const routes = await expandRoutes(config.routes);
   const results = [];
 
-  for (const [index, route] of config.routes.entries()) {
-    const result = await checkRoute(route, state);
-    results.push(result);
+  for (const [index, route] of routes.entries()) {
+    results.push(await checkRoute(route, state));
 
-    if (index < config.routes.length - 1) {
+    if (index < routes.length - 1) {
       await sleep(1000);
     }
   }
 
+  saveState(state);
   return results;
 }
 
@@ -179,5 +162,4 @@ module.exports = {
   loadState,
   saveState,
   runChecksOnce,
-  isHoldInProgress,
 };

@@ -5,9 +5,8 @@ const { config } = require("./config");
 const { sleep, log } = require("./helpers");
 
 // Turnstile detects Playwright-launched browsers (automation flags), so we spawn
-// a plain Chrome with a debugging port and attach over CDP instead. Both relogin
-// and the seat-hold flow reuse this so the Turnstile-friendly launch stays in one
-// place.
+// a plain Chrome with a debugging port and attach over CDP instead. Relogin
+// goes through here so the Turnstile-friendly launch stays in one place.
 function spawnChrome(profileDir, port) {
   fs.mkdirSync(profileDir, { recursive: true });
   const args = [
@@ -51,9 +50,7 @@ async function waitForCdp(port) {
 
 /**
  * Spawn a plain Chrome on `profileDir`, attach over CDP and return a ready page
- * plus a `close()` that tears everything down. The caller owns the lifetime —
- * used by the hold rotation, where the next account's browser must already be
- * open (and logged in) while the previous one is still holding.
+ * plus a `close()` that tears everything down. The caller owns the lifetime.
  */
 async function openChromePage(profileDir, port) {
   log(`Launching browser (profile ${profileDir}, port ${port})...`);
@@ -101,7 +98,7 @@ async function openChromePage(profileDir, port) {
 
 /**
  * Scoped variant of `openChromePage`: hand a ready page to `fn` and always clean
- * up afterwards. Used by the one-shot flows (relogin, holder login, hold-test).
+ * up afterwards. Used by the one-shot relogin flow.
  */
 async function withChromePage(profileDir, port, fn) {
   const session = await openChromePage(profileDir, port);

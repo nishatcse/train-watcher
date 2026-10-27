@@ -5,10 +5,12 @@
   "main": "src/index.js",
   "scripts": {
     "watch": "node src/index.js",
+    "logs": "tail -n 40 -F output/watcher.log",
     "check-once": "node src/index.js --once",
     "relogin": "node src/relogin.js",
-    "holder-login": "node src/holder-login.js",
-    "hold-test": "node src/seat-holder.js",
+    "refresh": "node src/token-refresh.js",
+    "discover": "node discover.js",
+    "location": "node src/train-location.js",
     "test-telegram": "node src/test-telegram.js"
   },
   "keywords": [],
