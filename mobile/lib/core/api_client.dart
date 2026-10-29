@@ -111,6 +111,12 @@ class ApiClient {
   Future<VerifyResult> verify(Map<String, dynamic> body) async =>
       VerifyResult.fromJson(await _send('POST', '/v1/watchers/verify', body: body, timeout: const Duration(seconds: 40)));
 
+  // ---- seat holds (run on the server by the holder-worker) ----
+  Future<Map<String, dynamic>> startHold(Map<String, dynamic> body) => _send('POST', '/v1/holds', body: body);
+  Future<Map<String, dynamic>> currentHold() => _send('GET', '/v1/holds/current');
+  Future<Map<String, dynamic>> stopHold(String id) => _send('DELETE', '/v1/holds/$id');
+  Future<void> holdAlert(String title, String body) => _send('POST', '/v1/holds/alert', body: {'title': title, 'body': body});
+
   // ---- alerts ----
   Future<List<AlertItem>> notifications() async {
     final r = await _send('GET', '/v1/notifications', query: {'limit': '60'});

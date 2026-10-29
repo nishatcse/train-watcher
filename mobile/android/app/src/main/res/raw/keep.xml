@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The alert ring is only referenced by name at run time; stop resource shrinking from removing it. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@raw/seat_ring" />

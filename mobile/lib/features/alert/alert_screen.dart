@@ -29,10 +29,9 @@ class _AlertScreenState extends ConsumerState<AlertScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _lockedLaunch = await Keyguard.isLocked();
       if (mounted) setState(() {});
-      // Opening it while the phone is in use is enough to stop the ringing (the quiet copy stays in
-      // the shade). Popped up over a LOCKED phone, nobody has seen it yet, so it keeps ringing until
-      // they press Dismiss / Book now (or the two-minute cap).
-      if (!_lockedLaunch) await NotificationService.stopRinging(widget.data.alertId);
+      // The ringing is deliberately NOT stopped here. A seat alert must ring like a phone call until
+      // the owner answers it (Book now / Dismiss) or the two-minute cap ends it, whether the phone is
+      // locked or in their hand. Opening this screen on its own proves nothing was noticed.
       if (widget.autoBook && !_lockedLaunch) _book();
     });
   }
@@ -72,7 +71,7 @@ class _AlertScreenState extends ConsumerState<AlertScreen> {
       await NotificationService.clearAlert(widget.data.alertId);
       _ack();
       if (!mounted) return;
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => BookingBrowserScreen(url: url)));
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => BookingBrowserScreen(url: url, trainName: widget.data.trainName)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

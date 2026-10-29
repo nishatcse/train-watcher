@@ -11,6 +11,8 @@ import '../alert/alert_screen.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../error/error_screen.dart';
 import '../history/history_screen.dart';
+import '../holder/hold_guard.dart';
+import '../holder/seat_holder_screen.dart';
 import '../session/session_screen.dart';
 import '../settings/settings_screen.dart';
 import '../watchers/watchers_screen.dart';
@@ -31,6 +33,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
     pendingTap.addListener(_onTap);
     foregroundAlert.addListener(_onForegroundAlert);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // A seat hold was running when the app died (swiped away, killed, rebooted): carry on with it first.
+      if (await HoldGuard.wasActive() && mounted) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const SeatHolderScreen(resume: true)));
+      }
       await _ensureNotificationPermission();
       await PushService.register(ref.read(apiProvider));
       _onTap(); // a tap that cold-started the app

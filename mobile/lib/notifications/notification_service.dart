@@ -62,6 +62,9 @@ class NotificationService {
   static const _alertChannel = 'seat_alerts_v2';
   static const _quietChannel = 'seat_alerts_quiet_v2';
   static const _sessionChannel = 'session_alerts_v2';
+  // Our own group key. Without one, Xiaomi's system builds an automatic "ranker_group" summary out of the
+  // ring + kept copies, inherits the LOUD channel's vibration, and keeps buzzing after the ring is cancelled.
+  static const _alertGroup = 'train_watcher_seat_alerts';
   static bool _ready = false;
 
   static int ringId(String alertId) => alertId.hashCode & 0x3fffffff;
@@ -191,6 +194,7 @@ class NotificationService {
           importance: Importance.max,
           priority: Priority.max,
           category: AndroidNotificationCategory.alarm,
+          groupKey: _alertGroup,
           fullScreenIntent: true,
           autoCancel: true,
           timeoutAfter: 120000,
@@ -219,6 +223,7 @@ class NotificationService {
           'Seat alerts (kept)',
           importance: Importance.low,
           priority: Priority.low,
+          groupKey: _alertGroup,
           autoCancel: false,
           playSound: false,
           enableVibration: false,
@@ -251,9 +256,6 @@ class NotificationService {
       ),
     );
   }
-
-  /// Stops the ringing (the notification is what rings) but keeps the quiet copy.
-  static Future<void> stopRinging(String alertId) => plugin.cancel(id: ringId(alertId));
 
   static Future<void> clearAlert(String alertId) async {
     await plugin.cancel(id: ringId(alertId));

@@ -10,7 +10,7 @@ const STATIONS_TTL_MS = 6 * 60 * 60 * 1000;
 const CATALOG_STALE_MS = 48 * 60 * 60 * 1000;
 
 function createApiRouter(deps) {
-  const { db, sessions, watchers, notifier, scheduler, shohoz, config, channels } = deps;
+  const { db, sessions, watchers, holds, notifier, scheduler, shohoz, config, channels } = deps;
   const router = express.Router();
   const stationsCache = new Map();
   const pairAttempts = new Map(); // ip -> [timestamps]
@@ -60,6 +60,44 @@ function createApiRouter(deps) {
   });
 
   // ---------- admin session upload (CLI fallback when the phone cannot log in) ----------
+  // ---------- holder-worker API (admin token; the worker has no database access) ----------
+  router.post("/admin/worker/lease", requireAdmin, async (req, res) => {
+    if (!req.body?.workerId) throw badRequest("workerId is required");
+    res.json(await holds.lease(String(req.body.workerId)));
+  });
+  router.post("/admin/worker/claim", requireAdmin, async (_req, res) => res.json(await holds.claim()));
+  router.get("/admin/worker/session", requireAdmin, async (_req, res) => {
+    const r = (await db.query("select blob_enc, updated_at from session where id = 1")).rows[0];
+    // The blob stays encrypted: the worker has the key (SESSION_ENCRYPTION_KEY) and decrypts it itself.
+    res.json({ blobEnc: r?.blob_enc || null, updatedAt: r?.updated_at || null });
+  });
+  router.get("/admin/worker/holds/:id/status", requireAdmin, async (req, res) => res.json(await holds.workerStatus(req.params.id)));
+  router.post("/admin/worker/holds/:id/event", requireAdmin, async (req, res) => {
+    await holds.workerEvent(req.params.id, req.body?.message);
+    res.json({ ok: true });
+  });
+  router.post("/admin/worker/holds/:id/update", requireAdmin, async (req, res) => {
+    await holds.workerUpdate(req.params.id, req.body || {});
+    res.json({ ok: true });
+  });
+  router.post("/admin/worker/holds/:id/finish", requireAdmin, async (req, res) => {
+    await holds.workerFinish(req.params.id, req.body || {});
+    res.json({ ok: true });
+  });
+
+  // The holder-worker asks the backend (which owns push + Telegram) to tell the owner something about a hold.
+  router.post("/admin/hold-alert", requireAdmin, async (req, res) => {
+    const { title, body, loginNeeded } = req.body || {};
+    if (!title || !body) throw badRequest("title and body are required");
+    const sent = await notifier.dispatch({
+      kind: "hold_attention",
+      title: String(title).slice(0, 120),
+      body: String(body).slice(0, 400),
+      data: loginNeeded ? { action: "open_login" } : {},
+    });
+    res.json({ ok: true, channels: sent.channels });
+  });
+
   router.post("/admin/session", requireAdmin, async (req, res) => {
     const status = await sessions.save(req.body, { source: "admin" });
     scheduler.wake();
@@ -168,6 +206,30 @@ function createApiRouter(deps) {
     await watchers.remove(req.params.id);
     res.json({ ok: true });
   });
+
+  // ---------- seat holds (run by the holder-worker service) ----------
+  v1.post("/holds", async (req, res) => {
+    res.status(201).json(await holds.create(req.body || {}));
+  });
+
+  // The phone's own holder (not the server worker) tells the owner something about a hold: push + Telegram.
+  v1.post("/holds/alert", async (req, res) => {
+    const { title, body } = req.body || {};
+    if (!title || !body) throw badRequest("title and body are required");
+    const sent = await notifier.dispatch({
+      kind: "hold_attention",
+      title: String(title).slice(0, 120),
+      body: String(body).slice(0, 400),
+      data: {},
+    });
+    res.json({ ok: true, channels: sent.channels });
+  });
+
+  v1.get("/holds/current", async (_req, res) => res.json((await holds.current()) || { hold: null, events: [] }));
+
+  v1.get("/holds/:id", async (req, res) => res.json(await holds.get(req.params.id)));
+
+  v1.delete("/holds/:id", async (req, res) => res.json(await holds.requestStop(req.params.id)));
 
   // ---------- notification history ----------
   v1.get("/notifications", async (req, res) => {

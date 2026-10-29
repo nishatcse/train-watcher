@@ -2,12 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../holder/seat_holder_config.dart';
+import '../holder/seat_holder_screen.dart';
+
 /// The official booking site inside the app. It shares storage with the Railway login
 /// screen, so after logging in there the owner is already signed in here. Payment
 /// pages that hand off to another app (bKash, cards, banking apps) are passed to Android.
 class BookingBrowserScreen extends StatefulWidget {
-  const BookingBrowserScreen({super.key, required this.url});
+  const BookingBrowserScreen({super.key, required this.url, this.trainName = ''});
   final String url;
+
+  /// Pre-fills the Auto-Hold screen when the browser was opened from a seat alert.
+  final String trainName;
   @override
   State<BookingBrowserScreen> createState() => _BookingBrowserScreenState();
 }
@@ -40,6 +46,19 @@ class _BookingBrowserScreenState extends State<BookingBrowserScreen> {
       ..loadRequest(Uri.parse(widget.url));
   }
 
+  Future<void> _autoHold() async {
+    final current = await _c.currentUrl() ?? widget.url;
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatHolderScreen(
+          initialConfig: SeatHolderConfig.fromSearchUrl(current, trainName: widget.trainName),
+        ),
+      ),
+    );
+  }
+
   Future<void> _chrome() async {
     final current = await _c.currentUrl() ?? widget.url;
     await launchUrl(Uri.parse(current), mode: LaunchMode.externalApplication);
@@ -61,6 +80,7 @@ class _BookingBrowserScreenState extends State<BookingBrowserScreen> {
         appBar: AppBar(
           title: const Text('Official booking site'),
           actions: [
+            IconButton(onPressed: _autoHold, icon: const Icon(Icons.airline_seat_recline_extra), tooltip: 'Auto-Hold Seats'),
             IconButton(onPressed: () => _c.reload(), icon: const Icon(Icons.refresh), tooltip: 'Reload'),
             IconButton(onPressed: _chrome, icon: const Icon(Icons.open_in_browser), tooltip: 'Open in Chrome'),
           ],

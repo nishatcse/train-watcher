@@ -7,6 +7,7 @@ const { sendTelegramMessage } = require("./services/telegram");
 const { createNotifier } = require("./services/notifier");
 const { createSessions } = require("./services/sessions");
 const { createWatchers } = require("./services/watchers");
+const { createHolds } = require("./services/holds");
 const { createScheduler } = require("./scheduler");
 const { createShohozClient } = require("./lib/shohoz");
 const { getSettings } = require("./services/settings");
@@ -33,13 +34,14 @@ async function main() {
   const getSearchDayLimit = async () => (await db.query("select search_day_limit from catalog_cache where id = 1")).rows[0].search_day_limit;
 
   const watchers = createWatchers({ db, getCatalog });
+  const holds = createHolds({ db });
   const scheduler = createScheduler({
     db, shohoz, sessions, notifier, watchers, getSettings: settings, getSearchDayLimit, log,
     directAlert: telegram ? (text) => telegram.send(text) : null,
   });
 
   const channels = { telegram: Boolean(telegram), fcm: Boolean(fcm) };
-  const app = createApp({ db, sessions, watchers, notifier, scheduler, shohoz, config, channels, log });
+  const app = createApp({ db, sessions, watchers, holds, notifier, scheduler, shohoz, config, channels, log });
 
   const server = app.listen(config.port, () => log(`listening on :${config.port} (telegram ${channels.telegram ? "on" : "off"}, push ${channels.fcm ? "on" : "off"})`));
 

@@ -8,6 +8,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../core/config.dart';
 import '../../core/providers.dart';
 import '../../widgets/common.dart';
+import '../holder/seat_holder_controller.dart';
 
 /// The owner logs in on the REAL Railway page, typing their own password and passing
 /// the site's own check themselves. The app never sees the password: it only reads
@@ -88,6 +89,8 @@ class _RailwayLoginScreenState extends ConsumerState<RailwayLoginScreen> {
     try {
       final body = <String, dynamic>{for (final e in s.entries) if (e.value != null && e.value.toString().isNotEmpty) e.key: e.value};
       final status = await ref.read(apiProvider).postSession(body);
+      // a login may be a different account, and the seat holder's site-block wait belongs to the old one
+      await SeatHolderController.forgetSavedBlock();
       ref.invalidate(statusProvider);
       ref.invalidate(catalogProvider);
       if (!mounted) return;

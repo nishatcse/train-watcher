@@ -9,6 +9,9 @@ import '../../notifications/notification_service.dart';
 import '../../notifications/push_service.dart';
 import '../../widgets/common.dart';
 import '../alert/alert_screen.dart';
+import '../holder/seat_holder_screen.dart';
+import '../holder/remote_hold_ui.dart';
+import '../holder/server_hold_screen.dart';
 import '../monitoring/monitoring_screen.dart';
 import '../session/session_screen.dart';
 
@@ -33,6 +36,8 @@ class DashboardScreen extends ConsumerWidget {
           onRetry: () => ref.invalidate(statusProvider),
           data: (s) => ListView(padding: const EdgeInsets.all(16), children: [
             _SessionCard(s.session),
+            const SizedBox(height: 12),
+            const _SeatHolderCard(),
             const SizedBox(height: 12),
             _EngineCard(s),
             const SizedBox(height: 12),
@@ -208,3 +213,67 @@ class _PermissionBanner extends ConsumerWidget {
       );
   }
 }
+
+class _SeatHolderCard extends ConsumerWidget {
+  const _SeatHolderCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = Theme.of(context);
+    final live = ref.watch(remoteHoldProvider).valueOrNull;
+    final entry = Card(
+      color: Colors.blue.withValues(alpha: 0.08),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SeatHolderScreen()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(Icons.airline_seat_recline_extra, color: Colors.blue.shade700, size: 32),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Seat Holder (Auto Loop)',
+                      style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text('Hold seats, release and re-select on a timer until your end time.'),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30), alignment: Alignment.centerLeft),
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ServerHoldScreen())),
+                      icon: const Icon(Icons.cloud_upload_outlined, size: 18),
+                      label: const Text('Run on the server (phone stays free)'),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    // While the server is holding seats, show them right here on the home page.
+    if (live?.hold?.active != true) return entry;
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ServerHoldScreen())),
+          child: RemoteHoldPanel(view: live!, compact: true),
+        ),
+        const SizedBox(height: 12),
+        entry,
+      ],
+    );
+  }
+}
+

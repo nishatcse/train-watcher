@@ -1,0 +1,17 @@
+{
+  "name": "holder-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keeps the owner's seats held on the booking site from a real Chrome (Cloudflare Turnstile makes plain HTTP impossible).",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "sh start.sh",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
